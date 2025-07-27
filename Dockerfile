@@ -1,21 +1,35 @@
-FROM node:lts-buster
+FROM node:lts-buster-slim
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        imagemagick \
-        webp \
-    && apt-get clean && \
+# Update Debian repositories and install system dependencies
+RUN echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list && \
+    echo "deb http://archive.debian.org/debian-security buster/updates main" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y \
+    ffmpeg \
+    imagemagick \
+    webp \
+    wget \
+    gnupg \
+    git \
+    ca-certificates \
+    --allow-unauthenticated && \
+    wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - && \
+    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list && \
+    apt-get update && \
+    apt-get install -y google-chrome-stable \
+    fonts-freefont-ttf \
+    --allow-unauthenticated && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/app
+WORKDIR /app
 
-COPY package*.json ./
+# Copy only package.json first
+COPY package.json .
+RUN npm install --omit=dev
 
-RUN npm install && npm install -g qrcode-terminal pm2
-
+# Copy app source
 COPY . .
 
-EXPOSE 5000
-
+EXPOSE 7860
 CMD ["npm", "start"]
