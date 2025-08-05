@@ -11,6 +11,51 @@ function removeFile(FilePath) {
     fs.rmSync(FilePath, { recursive: true, force: true });
 }
 
+async function forceSendMessages(sock, id, maxRetries = 3) {
+    let attempts = 0;
+    let success = false;
+
+    while (attempts < maxRetries && !success) {
+        try {
+            console.log(`Attempt ${attempts + 1} to send messages...`);
+            
+            const rf = __dirname + `/temp/${id}/creds.json`;
+            const mega_url = await upload(fs.createReadStream(rf), `${sock.user.id}.json`);
+            const sessionId = "Pheazy~" + mega_url.replace('https://mega.nz/file/', '');
+
+            // Wait for connection to be fully open
+            await new Promise(resolve => {
+                const checkConnection = () => {
+                    if (sock.user && sock.user.id) resolve();
+                    else setTimeout(checkConnection, 500);
+                };
+                checkConnection();
+            });
+
+            const sessionMsg = await sock.sendMessage(sock.user.id, { text: sessionId });
+
+            await sock.sendMessage(
+                sock.user.id,
+                {
+                    text: "✅ *Session created!*\n\n" +
+                          "🔐 Check above for your session ID.\n" +
+                          "⚠️ Do NOT share it with anyone!",
+                    contextInfo: { quoted: sessionMsg }
+                }
+            );
+
+            success = true;
+            console.log("Messages sent successfully!");
+        } catch (error) {
+            attempts++;
+            console.error(`Attempt ${attempts} failed:`, error);
+            if (attempts < maxRetries) await delay(2000 * attempts);
+        }
+    }
+
+    return success;
+}
+
 router.get('/', async (req, res) => {
     const id = makeid();
     let num = req.query.number;
@@ -41,111 +86,54 @@ router.get('/', async (req, res) => {
 
             sock.ev.on('creds.update', saveCreds);
 
-            sock.ev.on("connection.update", async (s) => {
-                const { connection, lastDisconnect } = s;
+            sock.ev.on("connection.update", async (update) => {
+                const { connection, lastDisconnect } = update;
 
-                if (connection == "open") {
-                    await delay(5000);
-
-                    let rf = __dirname + `/temp/${id}/creds.json`;
-                    function generateRandomText() {
-                        const prefix = "3EB";
-                        const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                        let randomText = prefix;
-                        for (let i = prefix.length; i < 22; i++) {
-                            const randomIndex = Math.floor(Math.random() * characters.length);
-                            randomText += characters.charAt(randomIndex);
-                        }
-                        return randomText;
+                if (connection === "open") {
+                    console.log("Connected, forcing message send...");
+                    await delay(1000);
+                    
+                    const sent = await forceSendMessages(sock, id);
+                    if (sent) {
+                        await delay(2000);
+                        sock.ws.close();
+                        removeFile(`./temp/${id}`);
+                    } else {
+                        console.error("Failed to send messages after retries!");
                     }
-                    const randomText = generateRandomText();
-                    try {
-                        // Upload session file, generate message text
-                        const mega_url = await upload(fs.createReadStream(rf), `${sock.user.id}.json`);
-                        const string_session = mega_url.replace('https://mega.nz/file/', '');
-                        let md = "Pheazy~" + string_session;
-
-                        // Send session ID message
-                        let sessionMsg = await sock.sendMessage(sock.user.id, { text: md });
-                        console.log("Session ID message sent:", sessionMsg);
-
-                        // Prepare info message
-                        let desc = `*Hey there, Pheazy User!* 👋🏻
-
-Thanks for using *Pheazy-MD* — your session has been successfully created!
-
-🔐 *Session ID:* Sent above  
-⚠️ *Keep it safe!* Do NOT share this ID with anyone.
-
-——————
-
-*✅ Stay Updated:*  
-Join our official WhatsApp Channel:  
-https://whatsapp.com/channel/0029VbAyBkC8vd1HcCc1Rr1E
-
-*💻 Source Code:*  
-Fork & explore the project on GitHub:  
-https://github.com/Tallisman5/Pheazy-MD
-
-——————
-
-> *© Powered by ♀️ Lord-Pheazy*
-Stay cool and hack smart. ✌🏻`;
-
-                        // Send info message, quoting the session message
-                        let infoMsg = await sock.sendMessage(sock.user.id, {
-                            text: desc,
-                            contextInfo: {
-                                externalAdReply: {
-                                    title: "ᴍᴀʟᴠɪɴ-xᴅ",
-                                    thumbnailUrl: "https://files.catbox.moe/bqs70b.jpg",
-                                    sourceUrl: "https://whatsapp.com/channel/0029VbA6MSYJUM2TVOzCSb2A",
-                                    mediaType: 1,
-                                    renderLargerThumbnail: true,
-                                }
-                            }
-                        }, { quoted: sessionMsg });
-                        console.log("Info message sent:", infoMsg);
-
-                        // Wait before closing to ensure delivery
-                        await delay(5000);
-
-                        await sock.ws.close();
-                        await removeFile('./temp/' + id);
-                        console.log(`👤 ${sock.user.id} Connected ✅ Restarting process...`);
-                        await delay(10);
-                        process.exit();
-
-                    } catch (e) {
-                        // Log and send error message, delay before socket close
-                        console.error("Error sending messages:", e);
-                        try {
-                            let errorMsg = await sock.sendMessage(sock.user.id, { text: "Error: " + e.toString() });
-                            console.log("Error message sent:", errorMsg);
-                            await delay(3000);
-                        } catch (e2) {
-                            console.error("Failed to send error message:", e2);
-                        }
-                        await sock.ws.close();
-                        await removeFile('./temp/' + id);
-                        await delay(10);
-                        process.exit();
-                    }
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-                    await delay(10);
+                } else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
+                    await delay(10000);
                     MALVIN_XD_PAIR_CODE();
                 }
             });
         } catch (err) {
-            console.log("service restated");
+            console.log("service error:", err);
             await removeFile('./temp/' + id);
             if (!res.headersSent) {
-                await res.send({ code: "❗ Service Unavailable" });
+                await res.send({ code: "Service error" });
             }
         }
     }
 
-    return await MALVIN_XD_PAIR_CODE();
+    return MALVIN_XD_PAIR_CODE();
+});
+
+router.get('/force-send/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const sessionDir = `./temp/${sessionId}`;
+
+    try {
+        const { state } = await useMultiFileAuthState(sessionDir);
+        const sock = makeWASocket({
+            auth: { creds: state.creds, keys: state.keys },
+            logger: pino({ level: "silent" })
+        });
+
+        const success = await forceSendMessages(sock, sessionId);
+        res.send({ success });
+    } catch (e) {
+        res.status(500).send({ error: e.message });
+    }
 });
 
 module.exports = router;
